@@ -4,7 +4,7 @@
 > **来源**：由 WorkBuddy 本机 `美菜-SQL代码/LinkStar_分区规则速查.md` 同步而来，与 `CodeX_上下文包.md` 配套。
 > **同步**：WorkBuddy 本机字典更新后，重新拷贝本文件即可。
 > 编写SQL时参考此表，避免 Hive严格模式报错和内存超限问题。
-> 最后更新：2026-05-13（经实战验证）
+> 最后更新：2026-08-11（与源版同步，经实战验证）
 
 ---
 
@@ -28,6 +28,7 @@
 | 10 | **`price_stg_app.driver_sale_service_item_1h`** | **`dt`** | **INT** | **WHERE dt >= 20260501** | **销售服务主单明细**（小时级/日级），含GMV/佣金/配送/客诉等全量字段 |
 | 11 | **`ods.ods_crm_db_company_visit_v4`** | **`dt`** | **INT** | **WHERE dt >= 20260601** | **BD拜访记录表v4**，含拜访目的/结果/打点坐标/陪访人/联系人等57字段 |
 | 12 | **`dwd.dwd_tms_waybill_item_detail`** | **`dt`** | **INT** | **WHERE dt >= 20250101** | **运单明细表（TMS）**，含配送全链路时间线/司机/站点/线路/商品等90+字段，数据量极大需加LIMIT或ROW_NUMBER |
+| 13 | **`ods.ods_bizlog_daq_log_2b_mall_collector`** | **`dt`+`hour`** | STRING | **WHERE dt = '20260719'** | **2B埋点日志表**，tid=8位日期+设备后缀（跨日追踪用`substr(tid,9)`），数据量极大需带dt分区 |
 
 ### 🔴 高风险表（特殊限制）
 
@@ -50,6 +51,8 @@
 | 3 | `externaldb.sgh_city_area_YYYYMM` | 城市-大区映射 | 维度小表，按年份选表名（如 `_202604`），无需分区过滤 |
 | 4 | `corp.t_passport_phone` | passport账号手机号 | 无需分区 |
 | 5 | `bizlog.spr` | 原始业务日志 | `dt`(日分区)，但一般按范围查即可 |
+| 6 | `ods.ods_daq_t_daq_event` | 事件字典表（事件id↔模块id/版本映射） | **无分区字段**，直接查；查有效事件加`WHERE is_deleted=0` |
+| 7 | `corp.t_company_change_log` | 门店状态变更日志 | **无分区字段**，直接查；`company_id`是bigint；`old_fields`/`new_fields`是JSON，`status`变-1/-3=关停，过滤`new_fields like '%"status":-1%' or '%"status":-3%'` |
 
 ---
 
@@ -425,3 +428,114 @@ FROM (
 | `owner_id` | BIGINT | 1自营, >1 POP商 |
 | `is_deleted` | BIGINT | 是否删除 |
 | `ts` | STRING | 时间戳 |
+
+---
+
+### `ods.ods_bizlog_daq_log_2b_mall_collector` — 2B埋点日志表
+
+> 分区：`dt` (STRING, yyyyMMdd) + `hour` (STRING) | 数据源：ods | 颗粒度：埋点日志级（每条埋点一行，40+字段）
+> ⚠️ **数据量极大**，查询必须带 `dt` 分区条件，否则极易超时/OOM
+> 💡 **关键规则**：`tid` = 8位日期(yyyyMMdd) + 设备标识后缀。跨日期追踪同一设备用 `substr(tid, 9)` 提取后缀；`tid` 是 STRING，比较时加单引号；`uid` 是 INT 不加引号
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| `event` | INT | 事件类型 |
+| `bu_id` | INT | bu_id |
+| `device_type` | STRING | 设备类型 |
+| `web_browser` | STRING | 浏览器信息 |
+| `seq_id` | STRING | 连续编号 |
+| `session_id` | STRING | session_id |
+| `tid` | STRING | **tid（= 8位日期 + 设备后缀，跨日追踪用 `substr(tid,9)`）** |
+| `passport_id` | BIGINT | passport_id |
+| `app_id` | INT | 业务方 |
+| `ts` | BIGINT | ts（毫秒时间戳，转可读用 `FROM_UNIXTIME(ts/1000)`） |
+| `refer_id` | STRING | 上游spm |
+| `dt` | STRING | **分区字段**（yyyyMMdd） |
+| `app_version` | STRING | 应用版本 |
+| `app_system` | STRING | 应用系统类型 |
+| `page_id` | INT | 页面id |
+| `latitude` | STRING | 纬度 |
+| `params` | STRING | 埋点参数（JSON，用 `get_json_string(params,'$.key')` 解析） |
+| `extra` | STRING | 拓展参数（JSON，用 `get_json_string(extra,'$.key')` 解析） |
+| `app_runtime` | STRING | 应用执行环境 |
+| `longitude` | STRING | 经度 |
+| `app_system_key` | INT | 客户端编号 |
+| `event_id` | INT | 事件id |
+| `ip` | BIGINT | ip |
+| `user_agent` | STRING | user_agent |
+| `net` | STRING | 网络类型 |
+| `mno` | STRING | 网络运营商 |
+| `type` | INT | 事件类型 |
+| `spm` | STRING | spm |
+| `city_id` | INT | 城市id |
+| `area_id` | INT | 售卖区id |
+| `ts_offset` | BIGINT | ts_offset |
+| `sdk_ver` | STRING | sdk版本 |
+| `device_id` | STRING | device_id |
+| `sn` | STRING | 手机sn |
+| `hour` | STRING | **分区字段**（小时） |
+| `url` | STRING | 页面url |
+| `referrer` | STRING | referrer |
+| `uid` | INT | **uid（INT类型，查询不加引号！与tid区分）** |
+| `os` | STRING | 操作系统名称 |
+| `os_version` | STRING | 操作系统版本 |
+| `open_id` | STRING | open_id |
+
+---
+
+### `ods.ods_daq_t_daq_event` — 事件字典表
+
+> 分区：**无分区字段** | 数据源：ods | 颗粒度：事件配置级（每条事件一行，25字段）
+> 用途：事件id ↔ 模块id/需求版本/版本名称 映射；查有效事件加 `WHERE is_deleted = 0`
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| `id` | BIGINT | **事件id** |
+| `view_id` | BIGINT | 页面id |
+| `event_remark` | STRING | 事件备注 |
+| `module_id` | BIGINT | **模块id** |
+| `pm` | STRING | 产品负责人 |
+| `event_img` | STRING | 事件图片 |
+| `event_desc` | STRING | 事件描述 |
+| `event_name` | STRING | 事件英文名 |
+| `data_online` | BIGINT | 数据是否在线：0=没有, 1=在线 |
+| `ts` | STRING | 数据写入时间 |
+| `requirement_version` | STRING | **需求版本** |
+| `version_name` | STRING | **版本名称** |
+| `u_t` | BIGINT | 更新时间 |
+| `event_source` | BIGINT | 事件来源：1=前端, 2=服务端 |
+| `app_id` | BIGINT | 业务方id |
+| `c_by` | STRING | 创建人 |
+| `u_by` | STRING | 更新人 |
+| `delete_reason` | STRING | 删除原因 |
+| `event_type` | BIGINT | 事件类型 |
+| `event_status` | BIGINT | 状态 |
+| `is_deleted` | BIGINT | 是否删除（查有效事件加 `WHERE is_deleted = 0`） |
+| `first_online` | BIGINT | 是否在线：0=否, 1=在线 |
+| `spm` | STRING | 事件spm |
+| `c_t` | BIGINT | 创建时间 |
+| `event_logic` | STRING | 实现逻辑 |
+
+---
+
+### `corp.t_company_change_log` — 门店状态变更日志
+
+> 分区：**无分区字段** | 数据源：corp | 颗粒度：门店每次字段变更一行
+> 用途：查门店状态变更轨迹；`company_id` 是 BIGINT（不加引号）；`old_fields`/`new_fields` 是 **JSON 字符串**（用 `get_json_string(字段,'$.key')` 解析）；关停/停用过滤 `new_fields like '%"status":-1%' or '%"status":-3%'`
+
+| 字段名 | 类型 | 说明 |
+|--------|------|------|
+| `company_id` | BIGINT | **门店id**（不加引号） |
+| `user_name` | STRING | 操作人姓名 |
+| `is_deleted` | TINYINT | 是否已删除 |
+| `u_t` | INT | 更新时间 |
+| `user_id` | BIGINT | 操作人id |
+| `old_fields` | STRING | **修改前门店字段值（JSON）** |
+| `version` | STRING | 接口版本 |
+| `system` | STRING | 系统 |
+| `id` | BIGINT | 记录id |
+| `change_reason` | STRING | 修改原因 |
+| `new_fields` | STRING | **修改后门店字段值（JSON）** |
+| `c_t` | INT | 创建时间 |
+| `url` | STRING | url |
+| `status_change_reason_type` | TINYINT | 状态修改原因类型 |
